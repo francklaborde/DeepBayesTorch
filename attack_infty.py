@@ -103,7 +103,7 @@ def load_model(data_name, vae_type, checkpoint_index, device=None):
 
 
 def perform_attacks(
-    data_name, epsilons, batch_size, save_dir="./results/", device=None
+    data_name, epsilons, batch_size, save_result="./results/", device=None
 ):
     """
     Perform FGSM attack on a given model, evaluate accuracy vs. epsilon, and save results.
@@ -163,8 +163,7 @@ def perform_attacks(
             test_dataset, batch_size=batch_size, shuffle=False
         )
 
-        os.makedirs(save_dir, exist_ok=True)
-
+        os.makedirs(save_result, exist_ok=True)
         accuracies[vae_type] = {attack: [] for attack in attack_methods}
 
         for epsilon in epsilons:
@@ -234,11 +233,167 @@ def perform_attacks(
                 accuracies[vae_type][attack].append(correct / total)
 
     with open(
-        os.path.join(save_dir, f"{data_name}_accuracy_vs_epsilon.json"), "w"
+        os.path.join(save_result, f"{data_name}_accuracy_vs_epsilon.json"), "w"
     ) as f:
         json.dump(accuracies, f)
 
     return accuracies
+
+def perform_attacks_v2(
+    data_name, epsilons, batch_size, save_result="./results/", save_raw="./raw_result_attack", device=None
+):
+    """
+    Perform adversarial attacks on a given model, save generated adversarial examples, and evaluate accuracy.
+    """
+    vae_types = ["A", "B", "C", "D", "E", "F", "G"]
+    attack_methods = ["FGSM", "PGD", "MIM"]
+    accuracies = {vae_type: {} for vae_type in vae_types}
+
+    os.makedirs(save_raw, exist_ok=True)  # Ensure the raw result directory exists
+
+    for vae_type in vae_types:
+        encoder, generator = load_model(data_name, vae_type, 0)
+        encoder.eval()
+        input_shape = (1, 28, 28) if data_name == "mnist" else (3, 32, 32)
+        dimY = 10 if data_name != "gtsrb" else 43
+        ll = "l2"
+        K = 10
+
+        if vae_type == "A":
+            dec = (generator.pyz_params, generator.pxzy_params)
+            from alg.lowerbound_functions import lowerbound_A as lowerbound
+        elif vae_type == "B":
+            dec = (generator.pzy_params, generator.pxzy_params)
+            from alg.lowerbound_functions import lowerbound_B as lowerbound
+        elif vae_type == "C":
+            dec = (generator.pyzx_params, generator.pxz_params)
+            from alg.lowerbound_functions import lowerbound_C as lowerbound
+        elif vae_type == "D":
+            dec = (generator.pyzx_params, generator.pzx_params)
+            from alg.lowerbound_functions import lowerbound_D as lowerbound
+        elif vae_type == "E":
+            dec = (generator.pyz_params, generator.pzx_params)
+            from alg.lowerbound_functions import lowerbound_E as lowerbound
+        elif vae_type == "F":
+            dec = (generator.pyz_params, generator.pxz_params)
+            from alg.lowerbound_functions import lowerbound_F as lowerbound
+        elif vae_type == "G":
+            dec = (generator.pzy_params, generator.pxz_params)
+            from alg.lowerbound_functions import lowerbound_G as lowerbound
+        else:
+            raise ValueError(f"Unknown VAE type: {vae_type}")
+
+        enc_conv = encoder.encoder_conv
+        enc_mlp = encoder.enc_mlp
+        enc = (enc_conv, enc_mlp)
+        # _, eval_fn = construct_optimizer(X_ph, Y_ph, enc, dec, ll, K, vae_type)
+
+        _, test_dataset = load_data(data_name, path="./data", labels=None, conv=True)
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False
+        )
+
+        accuracies[vae_type] = {attack: [] for attack in attack_methods}
+
+        for epsilon in epsilons:
+            for attack in attack_methods:
+                x_adv = []
+                y_adv = []
+                x_clean = []
+                y_clean = []
+                correct = 0
+                total = 0
+
+                for images, labels in tqdm(
+                    test_loader, desc=f"{attack}, epsilon={epsilon}"
+                ):
+                    images, labels = images.to(device), labels.to(device)
+
+                    if attack == "FGSM":
+                        adv_images = fast_gradient_method(
+                            enc_conv,
+                            images,
+                            eps=epsilon,
+                            norm=np.inf,
+                            clip_min=0.0,
+                            clip_max=1.0,
+                            sanity_checks=False,
+                        )
+                    elif attack == "PGD":
+                        adv_images = projected_gradient_descent(
+                            enc_conv,
+                            images,
+                            eps=epsilon,
+                            eps_iter=0.01,
+                            nb_iter=100,
+                            clip_min=0.0,
+                            clip_max=1.0,
+                            rand_init=True,
+                            norm=np.inf,
+                            sanity_checks=False,
+                        )
+                    elif attack == "MIM":
+                        adv_images = momentum_iterative_method(
+                            enc_conv,
+                            images,
+                            eps=epsilon,
+                            eps_iter=0.01,
+                            nb_iter=100,
+                            decay_factor=1.0,
+                            clip_min=0.0,
+                            clip_max=1.0,
+                            norm=np.inf,
+                            sanity_checks=False,
+                        )
+                    else:
+                        raise ValueError(f"Unsupported attack: {attack}")
+
+                    y_pred = bayes_classifier(
+                        adv_images,
+                        (enc_conv, enc_mlp),
+                        dec,
+                        ll,
+                        dimY,
+                        lowerbound=lowerbound,
+                        K=10,
+                        beta=1.0,
+                    )
+                    correct += (torch.argmax(y_pred, dim=1) == labels).sum().item()
+                    total += labels.size(0)
+
+                    # Save batch data
+                    x_adv.append(adv_images.cpu().numpy())
+                    y_adv.append(y_pred.cpu().numpy())
+                    x_clean.append(images.cpu().numpy())
+                    y_clean.append(labels.cpu().numpy())
+
+                # Concatenate and save results
+                x_adv = np.concatenate(x_adv, axis=0)
+                y_adv = np.concatenate(y_adv, axis=0)
+                x_clean = np.concatenate(x_clean, axis=0)
+                y_clean = np.concatenate(y_clean, axis=0)
+
+                save_path = os.path.join(
+                    save_raw, f"{vae_type}_{attack}_epsilon_{epsilon}.npz"
+                )
+                np.savez(
+                    save_path,
+                    x_adv=x_adv,
+                    y_adv=y_adv,
+                    x_clean=x_clean,
+                    y_clean=y_clean,
+                )
+                print(f"Saved adversarial examples to {save_path}")
+
+                accuracies[vae_type][attack].append(correct / total)
+
+    with open(
+        os.path.join(save_result, f"{data_name}_accuracy_vs_epsilon.json"), "w"
+    ) as f:
+        json.dump(accuracies, f)
+
+    return accuracies
+
 
 
 def plot_results(json_file, save_dir, data_name, epsilons):
@@ -338,7 +493,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.compute:
-        results = perform_attacks(
+        results = perform_attacks_v2(
             data_name=args.data_name,
             epsilons=args.epsilons,
             batch_size=args.batch_size,
