@@ -71,7 +71,7 @@ def plot_detection_rate(data_name, attack, epsilons, data_dir = "./detection_res
     num_vae_types = len(vae_types)
     cmap = cm.get_cmap("rainbow", num_vae_types)
 
-    fig, axes = plt.subplots(1, len(detection_methods), figsize=(18, 6))
+    fig, axes = plt.subplots(1, len(detection_methods), figsize=(12, 4))
     for idx, detect_method in enumerate(detection_methods):
         ax = axes[idx]
         for j, vae_type in enumerate(vae_types):
@@ -89,9 +89,9 @@ def plot_detection_rate(data_name, attack, epsilons, data_dir = "./detection_res
         
         ax.set_title(f"{attack}, TP {detect_method} detection")
         ax.set_xlabel("Epsilon")
-        ax.set_ylabel("Detection Rate") if idx == 0 else None
-        ax.legend(loc="upper left")
-        ax.grid(True, ls="--")
+        ax.grid(linestyle="--")
+        #ax.legend()
+        
 
     plt.tight_layout()
     save_path = f"{save_dir}/{data_name}_{attack}_detection_rates_subplots.png"

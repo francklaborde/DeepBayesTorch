@@ -284,10 +284,6 @@ def test_attacks(
         y_adv_one_hot = F.one_hot(torch.argmax(y_adv, dim=1), num_classes=dimY).to(torch.float32)
         
         # Compute log probabilities
-        # Also get training logits for baseline stats
-        # y_logit_train = get_logits(model, x_train)
-        # results_train = comp_logp(y_logit_train, y_train, 'train', comp_logit_dist=True)
-
         results_clean = comp_logp(y_logit_clean, y_clean_one_hot,'clean')
         results_adv = comp_logp(y_logit_adv[ind_success], y_adv_one_hot[ind_success], 'adv (wrong)')
 
@@ -330,7 +326,7 @@ def test_attacks(
         # KL-based detection
         # Extract the logit distribution stats from training
         # last 5 results from results_train are [logit_mean, logit_std, logit_kl_mean, logit_kl_std, softmax_mean]
-        logit_mean, logit_std, kl_mean, kl_std, softmax_mean_list = results_clean[-5:]
+        _, _, kl_mean, kl_std, softmax_mean_list = results_clean[-5:]
 
         # We need to compute KL on train and adv again per class
         fp_rate_kl = []
